@@ -1,8 +1,21 @@
-version: '3.8'
 services:
-  web:
+  app:
+    # Nom explicite pour le retrouver facilement
+    container_name: youtube-transcript-mcp
+
+    # On construit l'image sur place
     build: .
+
+    # LE FIX : Redémarrage automatique
+    restart: unless-stopped
+
+    # Port : On mappe le 5000 du conteneur sur le 5000 de Loki
+    # (Vérifie juste que rien d'autre n'utilise le 5000 sur Loki avec 'ss -tulpn | grep 5000')
     ports:
       - "5000:5000"
+
     environment:
+      # On désactive l'auth interne de l'app puisque Caddy va s'en charger
       - AUTH_ENABLED=false
+    labels:
+      - "wud.watch=false"
