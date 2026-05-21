@@ -44,6 +44,63 @@ def vtt_to_json(vtt_file: str) -> list[dict]:
         })
     return captions
 
+def fetch_metadata(video_id: str) -> dict:
+    """Fetch YouTube video metadata using yt-dlp --dump-json"""
+    try:
+        result = subprocess.run(
+            [
+                'yt-dlp',
+                '--extractor-args', 'youtube:player_client=default',
+                '--dump-json',
+                '--skip-download',
+                f'https://www.youtube.com/watch?v={video_id}'
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return {
+                'success': False,
+                'error': 'Failed to fetch metadata',
+                'details': result.stderr
+            }
+
+        data = json.loads(result.stdout)
+
+        raw_date = data.get('upload_date', '')
+        upload_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}" if len(raw_date) == 8 else raw_date
+
+        return {
+            'success': True,
+            'metadata': {
+                'id': data.get('id'),
+                'title': data.get('title'),
+                'description': data.get('description'),
+                'upload_date': upload_date,
+                'channel': data.get('channel') or data.get('uploader'),
+                'channel_id': data.get('channel_id'),
+                'channel_url': data.get('channel_url'),
+                'duration': data.get('duration'),
+                'duration_string': data.get('duration_string'),
+                'view_count': data.get('view_count'),
+                'like_count': data.get('like_count'),
+                'tags': data.get('tags', []),
+                'categories': data.get('categories', []),
+                'thumbnail': data.get('thumbnail'),
+                'webpage_url': data.get('webpage_url'),
+            }
+        }
+
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'error': 'Timeout fetching metadata'}
+    except json.JSONDecodeError as e:
+        return {'success': False, 'error': 'Failed to parse metadata JSON', 'details': str(e)}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
 def fetch_transcript(video_id: str, lang: str = 'en') -> dict:
     """Fetch YouTube transcript using yt-dlp with language fallback"""
 
@@ -159,6 +216,34 @@ def get_transcript(url: str, language: str = "en") -> dict[str, Any]:
             'attempted_languages': result.get('attempted_languages', [])
         }
 
+# MCP Tool: Get Metadata
+@mcp.tool()
+def get_metadata(url: str) -> dict[str, Any]:
+    """
+    Retrieve metadata for a YouTube video
+
+    Args:
+        url: YouTube video URL (any format) or video ID
+
+    Returns:
+        Dictionary containing title, description, upload_date, channel, duration,
+        view_count, like_count, tags, categories, thumbnail, and webpage_url
+    """
+    video_id = extract_video_id(url)
+    if not video_id:
+        return {'error': 'Invalid YouTube URL'}
+
+    result = fetch_metadata(video_id)
+
+    if result['success']:
+        return result['metadata']
+    else:
+        return {
+            'error': result.get('error', 'Unknown error'),
+            'details': result.get('details', '')
+        }
+
+
 # Authentication middleware for legacy endpoints
 def require_api_key(func):
     async def wrapper(request: Request):
@@ -185,6 +270,22 @@ async def test_transcript_handler(request: Request):
     else:
         return JSONResponse(result, status_code=500)
 
+# Legacy endpoint for n8n: /test_metadata
+@require_api_key
+async def test_metadata_handler(request: Request):
+    """Legacy GET endpoint for testing metadata fetching (n8n compatible)"""
+    video_id = request.query_params.get('videoId')
+    if not video_id:
+        return JSONResponse({'error': 'Missing videoId parameter'}, status_code=400)
+
+    result = fetch_metadata(video_id)
+
+    if result['success']:
+        return JSONResponse(result)
+    else:
+        return JSONResponse(result, status_code=500)
+
+
 # Legacy endpoint for n8n: / (JSON-RPC)
 @require_api_key
 async def legacy_mcp_handler(request: Request):
@@ -203,7 +304,7 @@ async def legacy_mcp_handler(request: Request):
                 'capabilities': {'tools': {}},
                 'serverInfo': {
                     'name': 'youtube-transcript-custom',
-                    'version': '1.0.0'
+                    'version': '1.1.0'
                 }
             }
         }
@@ -214,24 +315,40 @@ async def legacy_mcp_handler(request: Request):
             'jsonrpc': '2.0',
             'id': message['id'],
             'result': {
-                'tools': [{
-                    'name': 'get_transcript',
-                    'description': 'Extract transcript from YouTube video URL',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'url': {
-                                'type': 'string',
-                                'description': 'YouTube video URL (any format)'
+                'tools': [
+                    {
+                        'name': 'get_transcript',
+                        'description': 'Extract transcript from YouTube video URL',
+                        'inputSchema': {
+                            'type': 'object',
+                            'properties': {
+                                'url': {
+                                    'type': 'string',
+                                    'description': 'YouTube video URL (any format)'
+                                },
+                                'language': {
+                                    'type': 'string',
+                                    'description': 'Optional language code (e.g., "en", "fr"). Defaults to "en".'
+                                }
                             },
-                            'language': {
-                                'type': 'string',
-                                'description': 'Optional language code (e.g., "en", "fr"). Defaults to "en".'
-                            }
-                        },
-                        'required': ['url']
+                            'required': ['url']
+                        }
+                    },
+                    {
+                        'name': 'get_metadata',
+                        'description': 'Retrieve metadata for a YouTube video (title, description, upload date, channel, duration, view/like counts, tags, thumbnail)',
+                        'inputSchema': {
+                            'type': 'object',
+                            'properties': {
+                                'url': {
+                                    'type': 'string',
+                                    'description': 'YouTube video URL (any format)'
+                                }
+                            },
+                            'required': ['url']
+                        }
                     }
-                }]
+                ]
             }
         }
         return JSONResponse(response)
@@ -249,17 +366,14 @@ async def legacy_mcp_handler(request: Request):
         else:
             args = raw_args or {}
 
+        tool_name = params.get('name')
         video_url = args.get('url')
-        lang = args.get('language', 'en')
 
         if not video_url:
             response = {
                 'jsonrpc': '2.0',
                 'id': message['id'],
-                'error': {
-                    'code': -1,
-                    'message': 'Missing or invalid url in arguments'
-                }
+                'error': {'code': -1, 'message': 'Missing or invalid url in arguments'}
             }
             return JSONResponse(response)
 
@@ -268,47 +382,67 @@ async def legacy_mcp_handler(request: Request):
             response = {
                 'jsonrpc': '2.0',
                 'id': message['id'],
-                'error': {
-                    'code': -1,
-                    'message': 'Invalid YouTube URL'
-                }
+                'error': {'code': -1, 'message': 'Invalid YouTube URL'}
             }
             return JSONResponse(response)
 
-        result = fetch_transcript(video_id, lang)
+        if tool_name == 'get_metadata':
+            result = fetch_metadata(video_id)
 
-        if result['success']:
-            payload = {
-                'transcript': result['transcript'],
-                'language': result.get('language'),
-                'requested_language': result.get('requested_language')
-            }
-            response = {
-                'jsonrpc': '2.0',
-                'id': message['id'],
-                'result': {
-                    'content': [
-                        {
-                            'type': 'text',
-                            'text': json.dumps(payload, ensure_ascii=False)
-                        }
-                    ],
-                    'structuredContent': payload
+            if result['success']:
+                payload = result['metadata']
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': message['id'],
+                    'result': {
+                        'content': [{'type': 'text', 'text': json.dumps(payload, ensure_ascii=False)}],
+                        'structuredContent': payload
+                    }
                 }
-            }
-            return JSONResponse(response)
+                return JSONResponse(response)
+            else:
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': message['id'],
+                    'error': {
+                        'code': -1,
+                        'message': result.get('error', 'Unknown error'),
+                        'details': result.get('details', '')
+                    }
+                }
+                return JSONResponse(response)
+
         else:
-            response = {
-                'jsonrpc': '2.0',
-                'id': message['id'],
-                'error': {
-                    'code': -1,
-                    'message': result.get('error', 'Unknown error'),
-                    'details': result.get('details', ''),
-                    'attempted_languages': result.get('attempted_languages', [])
+            lang = args.get('language', 'en')
+            result = fetch_transcript(video_id, lang)
+
+            if result['success']:
+                payload = {
+                    'transcript': result['transcript'],
+                    'language': result.get('language'),
+                    'requested_language': result.get('requested_language')
                 }
-            }
-            return JSONResponse(response)
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': message['id'],
+                    'result': {
+                        'content': [{'type': 'text', 'text': json.dumps(payload, ensure_ascii=False)}],
+                        'structuredContent': payload
+                    }
+                }
+                return JSONResponse(response)
+            else:
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': message['id'],
+                    'error': {
+                        'code': -1,
+                        'message': result.get('error', 'Unknown error'),
+                        'details': result.get('details', ''),
+                        'attempted_languages': result.get('attempted_languages', [])
+                    }
+                }
+                return JSONResponse(response)
 
     # Fallback for unknown methods
     response = {
@@ -326,6 +460,7 @@ app = Starlette(
     routes=[
         # 1. D'abord les routes spécifiques (Legacy n8n)
         Route("/test_transcript", test_transcript_handler, methods=["GET"]),
+        Route("/test_metadata", test_metadata_handler, methods=["GET"]),
         Route("/", legacy_mcp_handler, methods=["POST", "OPTIONS"]),
         
         # 2. Ensuite le Mount à la racine (Catch-all)
