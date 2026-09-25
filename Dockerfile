@@ -6,7 +6,7 @@
 # needs a JS runtime (Deno, installed via the yt-dlp[deno] extra) and musl/alpine has historically
 # caused issues with that class of native/JS tooling; slim-bookworm (glibc)
 # is the safer target for yt-dlp deployments.
-ARG PYTHON_VERSION=3.12.16
+ARG PYTHON_VERSION=3.12.14
 
 FROM python:${PYTHON_VERSION}-slim-bookworm AS base
 
