@@ -1,0 +1,35 @@
+.git
+.gitignore
+.gitattributes
+.github
+
+# Local dev / editors
+.venv
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Tests are not needed inside the runtime image
+tests/
+
+# Docs (not needed in the image; keep image small)
+README.md
+CHANGELOG.md
+CLAUDE.md
+
+# Misc
+*.log
+.env
+.env.local
+.DS_Store
