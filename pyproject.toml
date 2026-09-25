@@ -8,7 +8,7 @@ dependencies = [
     "starlette==1.7.0",
     "uvicorn==0.54.0",
     "webvtt-py==0.5.1",
-    "yt-dlp==2026.8.19",
+    "yt-dlp[default,deno]==2026.8.19",
     "anyio==4.15.1",
 ]
 

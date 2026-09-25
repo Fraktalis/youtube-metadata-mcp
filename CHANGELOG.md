@@ -20,8 +20,8 @@
 - Dependabot: daily checks on the `uv` ecosystem (yt-dlp breaks against YouTube often and needs to stay
   fresh) with other Python deps grouped to keep noise down; weekly checks on GitHub Actions and Docker base
   images.
-- Deno as the runtime's JS engine, required by yt-dlp's EJS component for solving YouTube's player
-  challenge (yt-dlp ≥ 2025.11.12).
+- `yt-dlp[default,deno]` extras: `yt-dlp-ejs` + Deno JS runtime, required to solve YouTube's player
+  challenge (yt-dlp ≥ 2025.11.12). Both locked in `uv.lock` and updated by Dependabot.
 
 ### Changed
 - `get_transcript` default output is now compact, deduplicated `paragraphs` text instead of raw WebVTT-derived

@@ -89,8 +89,10 @@ docker compose up -d --build  # local container
   without a reason recorded in the commit message.
 - yt-dlp is a pinned Python dependency, invoked via `python -m yt_dlp` / the venv console script — never
   a `latest` binary download.
-- Docker base image, the `uv` image, and Deno (the JS runtime yt-dlp's EJS needs for YouTube's player
-  challenge) are all pinned to exact tags. `:latest` is never used anywhere — images, GHCR release tags,
+- yt-dlp is installed with the `default,deno` extras: `default` pulls `yt-dlp-ejs` and `deno` pulls the
+  Deno JS runtime, both required since yt-dlp 2025.11.12 to solve YouTube's player challenge. Dropping
+  the extras silently breaks YouTube extraction in production while unit tests stay green.
+- Docker base image and the `uv` image are pinned to exact tags. `:latest` is never used anywhere — images, GHCR release tags,
   Docker Hub pulls, none of it.
 - Default `pytest` run has no network access; anything hitting real YouTube is marked
   `@pytest.mark.network` and excluded by `addopts = "-m 'not network'"`.

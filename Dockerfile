@@ -3,7 +3,7 @@
 # youtube-metadata-mcp — multi-stage build (amd64 only)
 #
 # Base image: Debian slim-bookworm, not alpine. yt-dlp's YouTube extraction
-# needs a JS runtime (see EJS stage below) and musl/alpine has historically
+# needs a JS runtime (Deno, installed via the yt-dlp[deno] extra) and musl/alpine has historically
 # caused issues with that class of native/JS tooling; slim-bookworm (glibc)
 # is the safer target for yt-dlp deployments.
 ARG PYTHON_VERSION=3.12.16
@@ -12,13 +12,6 @@ FROM python:${PYTHON_VERSION}-slim-bookworm AS base
 
 # --- uv, pinned to an exact release, taken from the official distroless image ---
 FROM ghcr.io/astral-sh/uv:0.12.19 AS uv
-
-# --- Deno, pinned to an exact release. Required at runtime: since yt-dlp
-# 2025.11.12 (EJS), YouTube extraction needs an external JS runtime to solve
-# the player challenge; Deno is the default/recommended runtime (min 2.3.0,
-# sandboxed, no extra yt-dlp flags needed as long as it's on PATH).
-# See: https://github.com/yt-dlp/yt-dlp/wiki/EJS
-FROM denoland/deno:bin-2.9.7 AS deno
 
 # ---------------------------------------------------------------------------
 # builder: resolve and install the locked dependency set + the project itself
@@ -49,7 +42,8 @@ FROM base AS runtime
 
 # ffmpeg is intentionally NOT installed: this service only reads subtitles
 # (--skip-download), it never transcodes or muxes media.
-COPY --from=deno /deno /usr/local/bin/deno
+# Deno (JS runtime required by yt-dlp EJS for YouTube challenges) and
+# yt-dlp-ejs come from the locked `yt-dlp[default,deno]` extras in .venv/bin.
 
 RUN groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --create-home --shell /usr/sbin/nologin app
