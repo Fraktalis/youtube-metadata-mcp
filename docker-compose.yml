@@ -1,21 +1,19 @@
 services:
   app:
-    # Nom explicite pour le retrouver facilement
-    container_name: youtube-transcript-mcp
+    container_name: youtube-metadata-mcp
 
-    # On construit l'image sur place
+    # Local dev: build from source.
     build: .
+    # Production alternative: pull the published, version-pinned image from
+    # GHCR instead of building locally (never :latest — pin an exact tag).
+    # image: ghcr.io/fraktalis/youtube-metadata-mcp:vX.Y.Z
 
-    # LE FIX : Redémarrage automatique
     restart: unless-stopped
 
-    # Port : On mappe le 5000 du conteneur sur le 5000 de Loki
-    # (Vérifie juste que rien d'autre n'utilise le 5000 sur Loki avec 'ss -tulpn | grep 5000')
     ports:
       - "5000:5000"
 
-    environment:
-      # On désactive l'auth interne de l'app puisque Caddy va s'en charger
-      - AUTH_ENABLED=false
     labels:
+      # Auth and TLS are handled by the reverse proxy in front of this
+      # service; the app itself has no auth of its own.
       - "wud.watch=false"
