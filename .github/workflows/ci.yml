@@ -76,6 +76,20 @@ jobs:
           echo "::error::Container did not become healthy within 30s"
           exit 1
 
+      - name: Smoke test - SSE accepts a proxied Host header
+        run: |
+          docker run -d --name mcp-sse -p 5001:5000 youtube-metadata-mcp:ci
+          trap 'docker rm -f mcp-sse || true' EXIT
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:5001/health && break
+            sleep 1
+          done
+          # Behind the reverse proxy every request carries the public Host header.
+          # The MCP SDK's default rejects it with 421; /sse must answer 200.
+          code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' -H 'Host: mcp.example.org' http://127.0.0.1:5001/sse || true)
+          echo "GET /sse with public Host -> ${code}"
+          test "$code" = "200"
+
       - name: Smoke test - yt-dlp available
         run: docker run --rm --entrypoint python youtube-metadata-mcp:ci -m yt_dlp --version
 

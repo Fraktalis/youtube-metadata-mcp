@@ -40,14 +40,14 @@ layer anymore.
    ignored (yt-dlp can exit non-zero on partial success). Manual subs win over auto-subs when both
    flags produce a match. Language fallback order: `en` → `en, fr, es, de, pt, ja, ko`; `fr` → `fr,
    fr-orig, en, es, de`; anything else → `lang, en, fr, es`.
-2. `transcript.dedup`: YouTube's rolling auto-subs repeat the previous cue's line(s) and add one new
+2. `transcript.dedup_cues`: YouTube's rolling auto-subs repeat the previous cue's line(s) and add one new
    line per cue. Dedup walks cues in order, keeping the last-emitted line per track; a cue whose lines
    are all already emitted only extends the previous segment's `end_s` and produces no new segment.
    Manual/non-rolling subtitles (no repeated lines) must pass through as one segment per cue/line,
    unchanged.
-3. `transcript.format_paragraphs` / `format_segments`: bucket segments into 60s windows (`[mm:ss]`, or
+3. `transcript.build_paragraph_units` / `build_segment_units`: bucket segments into 60s windows (`[mm:ss]`, or
    `[h:mm:ss]` once `video_duration >= 3600`) or return them as `{start, end, text}` records.
-4. `transcript.paginate`: filter by `start`/`end`, accumulate rendered units until `max_chars` would be
+4. `transcript.select_segments` + `paginate_units` (driven by `build_transcript_payload`): filter by `start`/`end`, accumulate rendered units until `max_chars` would be
    exceeded (always return at least one unit even if it alone exceeds the budget), and compute
    `coverage` (`range_start`, `range_end`, `video_duration`, `complete`, `next_start`).
 
@@ -63,6 +63,12 @@ layer anymore.
   left out of this response; `next_start` is `null` exactly when `complete` is `true`.
 - **At-least-one-unit guarantee**: pagination always returns at least one unit, even a single one
   larger than `max_chars`, rather than an empty response.
+- **Resume token is exact**: `coverage.next_start` is never rounded (rounding 52.039 up to 52.04 once
+  dropped segments). Tests page through `build_transcript_payload` on the real fixture with the token
+  round-tripped through JSON.
+- **Works behind a reverse proxy**: the SDK's `sse_app()` defaults to localhost-only Host checking
+  (421 on any public Host header). `server.transport_security_from_env()` disables it unless
+  `ALLOWED_HOSTS` is set; a test posts with a public Host header.
 - **`transcript.py` has no I/O**: any test for it should run with no filesystem or subprocess access.
   If a change needs I/O in there, it belongs in `ytdlp.py` instead.
 - **Tempdir isolation**: concurrent transcript requests must not be able to delete or clobber each
@@ -87,8 +93,8 @@ docker compose up -d --build  # local container
   must not need to re-resolve.
 - All runtime dependencies are pinned exactly (`==`) in `pyproject.toml`. Never relax a pin to a range
   without a reason recorded in the commit message.
-- yt-dlp is a pinned Python dependency, invoked via `python -m yt_dlp` / the venv console script — never
-  a `latest` binary download.
+- yt-dlp is a pinned Python dependency, invoked as `sys.executable -m yt_dlp` (the interpreter's own
+  environment, not PATH) — never a `latest` binary download.
 - yt-dlp is installed with the `default,deno` extras: `default` pulls `yt-dlp-ejs` and `deno` pulls the
   Deno JS runtime, both required since yt-dlp 2025.11.12 to solve YouTube's player challenge. Dropping
   the extras silently breaks YouTube extraction in production while unit tests stay green.

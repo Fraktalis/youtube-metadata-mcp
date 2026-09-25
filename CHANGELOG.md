@@ -12,6 +12,8 @@
   (list of `{start, end, text}`).
 - Dedup algorithm for rolling YouTube auto-subs: each spoken line is emitted once instead of once per
   overlapping cue, cutting transcript size roughly 3x or more.
+- `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` env vars to opt into Host/Origin checking on the SSE transport
+  (off by default so the server works behind a reverse proxy).
 - `GET /health` endpoint returning `{"status": "ok", "version": "..."}`, for uptime monitoring (Uptime Kuma).
 - Docker image published to GHCR (`ghcr.io/<owner>/youtube-metadata-mcp`) on every tagged release, built via
   GitHub Actions with `docker/build-push-action`, tagged by exact semver (never `:latest`).

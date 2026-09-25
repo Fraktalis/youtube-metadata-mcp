@@ -70,6 +70,9 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.image.outputs.name }}
+          # metadata-action adds :latest to semver tags by default (latest=auto).
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -78,7 +81,6 @@ jobs:
             org.opencontainers.image.title=youtube-metadata-mcp
             org.opencontainers.image.description=YouTube transcript & metadata MCP server (yt-dlp based)
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.licenses=MIT
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

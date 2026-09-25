@@ -71,7 +71,7 @@ The image is published to GHCR on every tagged release (never `:latest` — alwa
 ```yaml
 services:
   app:
-    image: ghcr.io/fraktalis/youtube-metadata-mcp:v2.0.0
+    image: ghcr.io/fraktalis/youtube-metadata-mcp:2.0.0
     container_name: youtube-metadata-mcp
     restart: unless-stopped
     ports:
@@ -82,6 +82,14 @@ services:
 
 Authentication is the reverse proxy's job (Caddy, etc.) — the server has none of its own. Point the
 Claude.ai connector at `https://<your-domain>/sse`.
+
+Environment variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PORT` | `5000` | Listen port. |
+| `ALLOWED_HOSTS` | unset | Comma-separated `Host` values accepted on `/sse` and `/messages/` (e.g. `yt.example.com`). Unset = no Host check, which is what you want behind a reverse proxy. Setting it enables the MCP SDK's DNS-rebinding protection. |
+| `ALLOWED_ORIGINS` | unset | Comma-separated `Origin` values accepted when `ALLOWED_HOSTS` is set. |
 
 `GET /health` returns `{"status": "ok", "version": "..."}` with HTTP 200; wire it into Uptime Kuma as an
 HTTP(s) monitor.

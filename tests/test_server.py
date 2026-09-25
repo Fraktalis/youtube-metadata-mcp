@@ -184,3 +184,41 @@ def test_legacy_test_metadata_route_removed():
     client = TestClient(app)
     resp = client.get("/test_metadata", params={"videoId": "abc12345678"})
     assert resp.status_code in (404, 405)
+
+
+# --- Reverse-proxy Host header (regression: SDK default rejected it with 421) ---
+
+PUBLIC_HOST = "yt-transcript-mcp.example.org"
+BOGUS_SESSION = "/messages/?session_id=00000000000000000000000000000000"
+
+
+def test_public_host_header_is_accepted_by_default():
+    from starlette.testclient import TestClient
+
+    from youtube_mcp.server import app
+
+    client = TestClient(app)
+    resp = client.post(BOGUS_SESSION, json={}, headers={"Host": PUBLIC_HOST})
+    # Reaches the session lookup (unknown session), not the host check.
+    assert resp.status_code != 421
+    assert resp.status_code in (400, 404)
+
+
+def test_allowed_hosts_env_enables_host_check():
+    from mcp.server.mcpserver import MCPServer
+    from starlette.testclient import TestClient
+
+    from youtube_mcp.server import transport_security_from_env
+
+    security = transport_security_from_env({"ALLOWED_HOSTS": PUBLIC_HOST})
+    assert security.enable_dns_rebinding_protection is True
+    app = MCPServer("t").sse_app(transport_security=security)
+    client = TestClient(app)
+    assert client.post(BOGUS_SESSION, json={}, headers={"Host": "evil.test"}).status_code == 421
+    assert client.post(BOGUS_SESSION, json={}, headers={"Host": PUBLIC_HOST}).status_code != 421
+
+
+def test_transport_security_disabled_without_env():
+    from youtube_mcp.server import transport_security_from_env
+
+    assert transport_security_from_env({}).enable_dns_rebinding_protection is False

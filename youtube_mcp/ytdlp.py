@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from typing import Any
 from youtube_mcp.transcript import language_attempts
 
 YTDLP_TIMEOUT_S = 30
+# Run the yt-dlp pinned in this interpreter's environment, not whatever is on PATH.
+YTDLP_CMD = (sys.executable, "-m", "yt_dlp")
 
 
 class YtDlpError(Exception):
@@ -63,7 +66,7 @@ def fetch_subtitles(video_id: str, lang: str) -> tuple[str, str]:
         with tempfile.TemporaryDirectory(prefix=f"ytdlp-{video_id}-") as tmpdir:
             out_template = str(Path(tmpdir) / "%(id)s.%(ext)s")
             cmd = [
-                "yt-dlp",
+                *YTDLP_CMD,
                 "--extractor-args",
                 "youtube:player_client=default",
                 "--write-sub",
@@ -112,7 +115,7 @@ def _format_upload_date(raw_date: str) -> str:
 def fetch_metadata(video_id: str) -> dict[str, Any]:
     """Fetch video metadata via `yt-dlp --dump-json`. Raises MetadataFetchError on failure."""
     cmd = [
-        "yt-dlp",
+        *YTDLP_CMD,
         "--extractor-args",
         "youtube:player_client=default",
         "--dump-json",

@@ -7,10 +7,12 @@ compatibility has been removed; auth is the reverse proxy's job.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 import anyio
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -123,5 +125,24 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "version": __version__})
 
 
-app = mcp.sse_app()
+def transport_security_from_env(env: dict[str, str] | None = None) -> TransportSecuritySettings:
+    """Host/Origin checks for the SSE transport.
+
+    The SDK's sse_app() defaults to host="127.0.0.1", which silently enables DNS
+    rebinding protection with only localhost allowed: behind a reverse proxy every
+    request then carries the public Host header and gets a 421. This server is
+    meant to sit behind a proxy, so the check is off unless ALLOWED_HOSTS
+    (comma-separated, e.g. "yt.example.com,yt.example.com:*") is set.
+    """
+    env = os.environ if env is None else env
+    hosts = [h.strip() for h in env.get("ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if not hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    origins = [o.strip() for o in env.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
+    )
+
+
+app = mcp.sse_app(transport_security=transport_security_from_env())
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

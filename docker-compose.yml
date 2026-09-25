@@ -6,7 +6,7 @@ services:
     build: .
     # Production alternative: pull the published, version-pinned image from
     # GHCR instead of building locally (never :latest — pin an exact tag).
-    # image: ghcr.io/fraktalis/youtube-metadata-mcp:vX.Y.Z
+    # image: ghcr.io/fraktalis/youtube-metadata-mcp:X.Y.Z
 
     restart: unless-stopped
 
