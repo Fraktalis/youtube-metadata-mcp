@@ -215,7 +215,9 @@ def clamp_max_chars(max_chars: int) -> int:
     return max(MIN_MAX_CHARS, min(MAX_MAX_CHARS, max_chars))
 
 
-def paginate_units(units: Sequence[Unit], max_chars: int) -> tuple[list[Unit], float | None]:
+def paginate_units(
+    units: Sequence[Unit], max_chars: int, *, sep_len: int = 1, overhead: int = 0
+) -> tuple[list[Unit], float | None]:
     """Accumulate units in order under a character budget.
 
     Always returns at least one unit (a single huge unit is returned whole).
@@ -224,9 +226,9 @@ def paginate_units(units: Sequence[Unit], max_chars: int) -> tuple[list[Unit], f
     """
     budget = clamp_max_chars(max_chars)
     selected: list[Unit] = []
-    total = 0
+    total = overhead
     for unit in units:
-        size = len(unit.rendered) + 1
+        size = len(unit.rendered) + (sep_len if selected else 0)
         if selected and total + size > budget:
             return selected, unit.start_s
         selected.append(unit)
@@ -262,7 +264,11 @@ def build_transcript_payload(
         if fmt == "paragraphs"
         else build_segment_units(filtered)
     )
-    selected, next_start = paginate_units(units, max_chars)
+    # paragraphs are joined by "\n"; segments are a JSON list: "[" + ", ".join + "]".
+    if fmt == "paragraphs":
+        selected, next_start = paginate_units(units, max_chars)
+    else:
+        selected, next_start = paginate_units(units, max_chars, sep_len=2, overhead=2)
     complete = next_start is None
 
     result: dict[str, Any] = {
@@ -289,7 +295,8 @@ def build_transcript_payload(
         "range_end": round(range_end, 2) if range_end is not None else None,
         "video_duration": round(video_duration, 2),
         "complete": complete,
-        "next_start": round(next_start, 2) if next_start is not None else None,
+        # Never round the resume token: rounding up past a segment start would drop it.
+        "next_start": next_start,
     }
     result["stats"] = {
         "raw_cues": len(cues),

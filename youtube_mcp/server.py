@@ -7,7 +7,7 @@ compatibility has been removed; auth is the reverse proxy's job.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -24,7 +24,7 @@ mcp = MCPServer("youtube-transcript-custom", version=__version__)
 async def get_transcript(
     url: str,
     language: str = "en",
-    format: str = "paragraphs",
+    format: Literal["paragraphs", "segments"] = "paragraphs",
     start: float | None = None,
     end: float | None = None,
     max_chars: int = transcript.DEFAULT_MAX_CHARS,

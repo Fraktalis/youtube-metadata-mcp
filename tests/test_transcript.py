@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from youtube_mcp import transcript as t
 from youtube_mcp.transcript import Cue, Segment
 
@@ -410,3 +414,49 @@ def test_synthetic_3_hour_video_fully_retrievable():
     # ~3 hours at 2s/line -> 5400 lines
     vtt, expected_lines = generate_rolling_vtt(num_lines=5400, seconds_per_line=2.0)
     _full_retrieval_via_pagination(vtt, expected_lines)
+
+
+# --- Regression: resume token must round-trip through the real payload builder ---
+# The real fixture has millisecond timestamps (e.g. 52.039). Rounding next_start
+# to 2 decimals (52.04) made `start >= next_start` skip that segment forever.
+
+
+def _page_through_payload(vtt_text: str, fmt: str, max_chars: int) -> list[dict]:
+    pages: list[dict] = []
+    start: float | None = None
+    for _ in range(10_000):
+        payload = t.build_transcript_payload(
+            vtt_text=vtt_text,
+            video_id="xjaqUJ_48k0",
+            language="fr",
+            requested_language="fr",
+            fmt=fmt,
+            start=start,
+            max_chars=max_chars,
+        )
+        pages.append(payload)
+        if payload["coverage"]["complete"]:
+            return pages
+        # Simulate a real client: the token goes through JSON.
+        start = json.loads(json.dumps(payload))["coverage"]["next_start"]
+    raise AssertionError("pagination did not terminate")
+
+
+@pytest.mark.parametrize("max_chars", [2000, 3333, 5000])
+def test_payload_pagination_segments_lossless_on_real_fixture(rolling_fixture_vtt, max_chars):
+    pages = _page_through_payload(rolling_fixture_vtt, "segments", max_chars)
+    single = _page_through_payload(rolling_fixture_vtt, "segments", 200_000)
+    assert len(single) == 1
+    paged = [seg for page in pages for seg in page["segments"]]
+    assert paged == single[0]["segments"]
+    assert len(pages) > 1
+
+
+# The 3-min excerpt is ~3k chars of paragraphs, so only the minimum budget paginates it.
+@pytest.mark.parametrize("max_chars", [2000])
+def test_payload_pagination_paragraphs_lossless_on_real_fixture(rolling_fixture_vtt, max_chars):
+    pages = _page_through_payload(rolling_fixture_vtt, "paragraphs", max_chars)
+    single = _page_through_payload(rolling_fixture_vtt, "paragraphs", 200_000)
+    paged = "\n".join(page["text"] for page in pages if page["text"])
+    assert paged == single[0]["text"]
+    assert len(pages) > 1

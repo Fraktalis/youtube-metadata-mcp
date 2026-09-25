@@ -86,12 +86,21 @@ async def test_call_get_transcript_invalid_url():
 
 @pytest.mark.anyio
 async def test_call_get_transcript_invalid_format():
-    result = await mcp.call_tool(
-        "get_transcript", {"url": "https://youtu.be/abc12345678", "format": "xml"}
-    )
-    payload = result.structured_content
-    assert "error" in payload
-    assert "format" in payload["error"].lower()
+    # format is a Literal, so the SDK rejects bad values before the tool body runs
+    # and the JSON schema advertises the enum to the LLM.
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError, match="paragraphs"):
+        await mcp.call_tool(
+            "get_transcript", {"url": "https://youtu.be/abc12345678", "format": "xml"}
+        )
+
+
+@pytest.mark.anyio
+async def test_get_transcript_schema_enumerates_formats():
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+    fmt = tools["get_transcript"].input_schema["properties"]["format"]
+    assert fmt["enum"] == ["paragraphs", "segments"]
 
 
 @pytest.mark.anyio
