@@ -1,0 +1,48 @@
+version: 2
+updates:
+  # Python dependencies via uv. yt-dlp breaks against YouTube frequently and
+  # must be checked daily. Dependabot does not allow two config blocks for
+  # the same ecosystem + directory (a second "uv" entry for "/" would be
+  # rejected), so there is no way to give yt-dlp a daily schedule and the
+  # rest of the Python deps a separate weekly one in this file. Trade-off
+  # taken here: the whole `uv` ecosystem is checked daily (so yt-dlp is never
+  # stale), and everything else is grouped into a single combined PR when
+  # there happen to be several minor/patch updates on the same day, so
+  # non-yt-dlp noise stays low without giving up the daily yt-dlp check.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "yt-dlp"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
