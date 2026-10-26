@@ -95,3 +95,10 @@ jobs:
 
       - name: Smoke test - deno available
         run: docker run --rm --entrypoint deno youtube-metadata-mcp:ci --version
+
+      - name: Smoke test - yt-dlp impersonation available (curl-cffi)
+        run: |
+          # Without a usable target YouTube answers HTTP 429 on subtitle downloads.
+          out=$(docker run --rm --entrypoint python youtube-metadata-mcp:ci -m yt_dlp --list-impersonate-targets)
+          echo "$out"
+          echo "$out" | grep -i chrome | grep -vi unavailable

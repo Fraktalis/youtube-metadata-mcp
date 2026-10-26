@@ -43,7 +43,7 @@ FROM base AS runtime
 # ffmpeg is intentionally NOT installed: this service only reads subtitles
 # (--skip-download), it never transcodes or muxes media.
 # Deno (JS runtime required by yt-dlp EJS for YouTube challenges) and
-# yt-dlp-ejs come from the locked `yt-dlp[default,deno]` extras in .venv/bin.
+# yt-dlp-ejs come from the locked `yt-dlp[default,deno,pin-curl-cffi]` extras in .venv/bin.
 
 RUN groupadd --system --gid 1000 app \
     && useradd --system --uid 1000 --gid app --create-home --shell /usr/sbin/nologin app

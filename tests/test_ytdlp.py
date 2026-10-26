@@ -23,9 +23,10 @@ def _extract_output_dir_and_video_id(cmd: list[str]) -> tuple[Path, str]:
 def _make_subtitle_run(
     lang_available: set[str] | None = None, cwd_writes: list[Path] | None = None
 ):
-    """Build a fake subprocess.run that writes a .vtt into the -o directory.
+    """Build a fake subprocess.run covering both yt-dlp calls of fetch_subtitles.
 
-    lang_available: if given, only these --sub-lang values "succeed" (write a file).
+    `--dump-json` lists lang_available (None = every language) as automatic captions;
+    `--sub-lang X` writes a .vtt into the -o directory.
     cwd_writes: if given, also records Path.cwd() at call time (to prove nothing
     is written there).
     """
@@ -33,10 +34,12 @@ def _make_subtitle_run(
     def fake_run(cmd, capture_output, text, timeout):
         if cwd_writes is not None:
             cwd_writes.append(Path.cwd())
+        if "--dump-json" in cmd:
+            langs = ALL_LANGS if lang_available is None else lang_available
+            payload = json.dumps({"automatic_captions": {lang: [] for lang in langs}})
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr="")
         sub_lang = cmd[cmd.index("--sub-lang") + 1]
         out_dir, video_id = _extract_output_dir_and_video_id(cmd)
-        if lang_available is not None and sub_lang not in lang_available:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=f"no subs for {sub_lang}")
         vtt_path = out_dir / f"{video_id}.{sub_lang}.vtt"
         vtt_path.write_text(
             f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello in {sub_lang}\n\n", encoding="utf-8"
@@ -44,6 +47,14 @@ def _make_subtitle_run(
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     return fake_run
+
+
+ALL_LANGS = {"en", "fr", "fr-orig", "es", "de", "pt", "ja", "ko"}
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep(monkeypatch):
+    monkeypatch.setattr(ytdlp, "RATE_LIMIT_RETRY_DELAY_S", 0)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +97,92 @@ def test_fetch_subtitles_all_languages_fail_raises_with_attempted_list():
     assert err.details is not None
 
 
+def test_fetch_subtitles_error_lists_languages_actually_offered():
+    fake_run = _make_subtitle_run(lang_available={"it", "ru"})
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        pytest.raises(ytdlp.SubtitleFetchError) as exc_info,
+    ):
+        ytdlp.fetch_subtitles("vid00000001", "en")
+    assert "it, ru" in exc_info.value.details
+
+
+def test_fetch_subtitles_does_one_extraction_plus_one_download():
+    calls: list[list[str]] = []
+    base = _make_subtitle_run(lang_available={"ko"})
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(cmd)
+        return base(cmd, capture_output, text, timeout)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "ko"
+    assert len(calls) == 2  # not one full extraction per candidate language
+    assert "--dump-json" in calls[0]
+    assert calls[1][calls[1].index("--sub-lang") + 1] == "ko"
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (HTTP 429)
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_STDERR = (
+    "WARNING: The extractor specified to use impersonation for this download, but no "
+    "impersonate target is available.\n"
+    "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests"
+)
+
+
+def test_fetch_subtitles_retries_once_on_429_then_succeeds():
+    base = _make_subtitle_run(lang_available={"en"})
+    download_calls = 0
+
+    def fake_run(cmd, capture_output, text, timeout):
+        nonlocal download_calls
+        if "--sub-lang" in cmd:
+            download_calls += 1
+            if download_calls == 1:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=_RATE_LIMIT_STDERR)
+        return base(cmd, capture_output, text, timeout)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "en"
+    assert download_calls == 2
+
+
+def test_fetch_subtitles_persistent_429_is_reported_as_rate_limit():
+    base = _make_subtitle_run(lang_available={"en"})
+
+    def fake_run(cmd, capture_output, text, timeout):
+        if "--sub-lang" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=_RATE_LIMIT_STDERR)
+        return base(cmd, capture_output, text, timeout)
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        pytest.raises(ytdlp.SubtitleFetchError) as exc_info,
+    ):
+        ytdlp.fetch_subtitles("vid00000001", "en")
+    details = exc_info.value.details
+    assert "rate limit" in details
+    assert "HTTP Error 429" in details
+    assert "impersonat" not in details  # warning noise filtered out
+
+
+def test_fetch_subtitles_listing_failure_surfaces_stderr():
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: Video unavailable")
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        pytest.raises(ytdlp.SubtitleFetchError) as exc_info,
+    ):
+        ytdlp.fetch_subtitles("vid00000001", "en")
+    assert exc_info.value.details == "ERROR: Video unavailable"
+
+
 # ---------------------------------------------------------------------------
 # Actual language parsed from filename
 # ---------------------------------------------------------------------------
@@ -108,6 +205,8 @@ def test_fetch_subtitles_writes_to_temp_dir_not_cwd(tmp_path, monkeypatch):
     written_dirs: list[Path] = []
 
     def fake_run(cmd, capture_output, text, timeout):
+        if "--dump-json" in cmd:
+            return _make_subtitle_run()(cmd, capture_output, text, timeout)
         out_dir, video_id = _extract_output_dir_and_video_id(cmd)
         written_dirs.append(out_dir)
         sub_lang = cmd[cmd.index("--sub-lang") + 1]
@@ -127,6 +226,8 @@ def test_fetch_subtitles_temp_dir_removed_even_on_success_first_try():
     seen_dirs: list[Path] = []
 
     def fake_run(cmd, capture_output, text, timeout):
+        if "--dump-json" in cmd:
+            return _make_subtitle_run()(cmd, capture_output, text, timeout)
         out_dir, video_id = _extract_output_dir_and_video_id(cmd)
         seen_dirs.append(out_dir)
         (out_dir / f"{video_id}.en.vtt").write_text("WEBVTT\n\n", encoding="utf-8")
@@ -149,6 +250,8 @@ def test_concurrent_fetches_same_video_id_do_not_interfere():
     errors: list[Exception] = []
 
     def fake_run(cmd, capture_output, text, timeout):
+        if "--dump-json" in cmd:
+            return _make_subtitle_run()(cmd, capture_output, text, timeout)
         sub_lang = cmd[cmd.index("--sub-lang") + 1]
         out_dir, video_id = _extract_output_dir_and_video_id(cmd)
         # Simulate slow I/O to widen the race window.
@@ -185,7 +288,7 @@ def test_concurrent_fetches_same_video_id_do_not_interfere():
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_subtitles_timeout_falls_through_all_languages():
+def test_fetch_subtitles_timeout_is_reported():
     def fake_run(cmd, capture_output, text, timeout):
         raise subprocess.TimeoutExpired(cmd, timeout)
 
