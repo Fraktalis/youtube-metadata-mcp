@@ -11,12 +11,14 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from youtube_mcp.transcript import language_attempts
 
 YTDLP_TIMEOUT_S = 30
+RATE_LIMIT_RETRY_DELAY_S = 3
 # Run the yt-dlp pinned in this interpreter's environment, not whatever is on PATH.
 YTDLP_CMD = (sys.executable, "-m", "yt_dlp")
 
@@ -53,57 +55,116 @@ def _lang_from_filename(filename: str, fallback: str) -> str:
     return fallback
 
 
+def _clean_stderr(stderr: str | None) -> str:
+    """Drop yt-dlp's impersonation warning noise so the real error stays readable."""
+    lines = [
+        line
+        for line in (stderr or "").splitlines()
+        if line.strip() and "impersonat" not in line.lower()
+    ]
+    return "\n".join(lines)
+
+
+def _is_rate_limited(stderr: str | None) -> bool:
+    return "429" in (stderr or "") or "too many requests" in (stderr or "").lower()
+
+
+def _run_ytdlp(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run yt-dlp, retrying once (after a pause) when YouTube answers HTTP 429."""
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_TIMEOUT_S)
+    if _is_rate_limited(result.stderr):
+        time.sleep(RATE_LIMIT_RETRY_DELAY_S)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_TIMEOUT_S)
+    return result
+
+
+def _list_subtitle_languages(video_id: str) -> tuple[set[str], str | None]:
+    """One yt-dlp extraction listing the subtitle languages YouTube offers for the video.
+
+    Returns (languages, error_details). `languages` merges manual and automatic tracks.
+    """
+    cmd = [
+        *YTDLP_CMD,
+        "--extractor-args",
+        "youtube:player_client=default",
+        "--dump-json",
+        "--skip-download",
+        _video_url(video_id),
+    ]
+    try:
+        result = _run_ytdlp(cmd)
+    except subprocess.TimeoutExpired:
+        return set(), "Timeout listing available subtitles"
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return set(), _clean_stderr(result.stderr) or "Could not list available subtitles"
+
+    languages = set(data.get("subtitles") or {}) | set(data.get("automatic_captions") or {})
+    return languages, None
+
+
 def fetch_subtitles(video_id: str, lang: str) -> tuple[str, str]:
     """Fetch a transcript's raw VTT text for video_id, with language fallback.
+
+    Does one extraction to learn which languages exist, picks the first language of the
+    fallback order that is available, then downloads that single track (instead of one
+    full extraction per candidate language, which got the server rate-limited by YouTube).
 
     Returns (vtt_text, actual_language). Raises SubtitleFetchError if no
     subtitle could be fetched in any attempted language.
     """
     attempts = language_attempts(lang)
-    last_details: str | None = None
 
-    for attempt_lang in attempts:
-        with tempfile.TemporaryDirectory(prefix=f"ytdlp-{video_id}-") as tmpdir:
-            out_template = str(Path(tmpdir) / "%(id)s.%(ext)s")
-            cmd = [
-                *YTDLP_CMD,
-                "--extractor-args",
-                "youtube:player_client=default",
-                "--write-sub",
-                "--write-auto-sub",
-                "--skip-download",
-                "--sub-lang",
-                attempt_lang,
-                _video_url(video_id),
-                "-o",
-                out_template,
-            ]
-            try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=YTDLP_TIMEOUT_S
-                )
-            except subprocess.TimeoutExpired:
-                last_details = f"Timeout fetching subtitles for '{attempt_lang}'"
-                continue
+    def fail(details: str | None) -> SubtitleFetchError:
+        return SubtitleFetchError(
+            "Failed to fetch transcript in any available language",
+            details=details,
+            attempted_languages=attempts,
+        )
 
-            # Ignore returncode: yt-dlp can exit non-zero even after writing subs.
-            vtt_files = sorted(Path(tmpdir).glob(f"{video_id}*.vtt"))
-            if vtt_files:
-                vtt_path = vtt_files[0]
-                actual_lang = _lang_from_filename(vtt_path.name, attempt_lang)
-                vtt_text = vtt_path.read_text(encoding="utf-8")
-                return vtt_text, actual_lang
+    available, error = _list_subtitle_languages(video_id)
+    if error:
+        raise fail(error)
 
-            if result.stderr and result.stderr.strip():
-                last_details = result.stderr.strip()
-            else:
-                last_details = f"No subtitles for '{attempt_lang}'"
+    chosen = next((candidate for candidate in attempts if candidate in available), None)
+    if chosen is None:
+        offered = ", ".join(sorted(available)) or "none"
+        raise fail(f"No subtitles in the attempted languages. Languages offered: {offered}")
 
-    raise SubtitleFetchError(
-        "Failed to fetch transcript in any available language",
-        details=last_details,
-        attempted_languages=attempts,
-    )
+    with tempfile.TemporaryDirectory(prefix=f"ytdlp-{video_id}-") as tmpdir:
+        out_template = str(Path(tmpdir) / "%(id)s.%(ext)s")
+        cmd = [
+            *YTDLP_CMD,
+            "--extractor-args",
+            "youtube:player_client=default",
+            "--write-sub",
+            "--write-auto-sub",
+            "--skip-download",
+            "--sleep-subtitles",
+            "1",
+            "--sub-lang",
+            chosen,
+            _video_url(video_id),
+            "-o",
+            out_template,
+        ]
+        try:
+            result = _run_ytdlp(cmd)
+        except subprocess.TimeoutExpired:
+            raise fail(f"Timeout fetching subtitles for '{chosen}'") from None
+
+        # Ignore returncode: yt-dlp can exit non-zero even after writing subs.
+        vtt_files = sorted(Path(tmpdir).glob(f"{video_id}*.vtt"))
+        if vtt_files:
+            vtt_path = vtt_files[0]
+            return vtt_path.read_text(encoding="utf-8"), _lang_from_filename(vtt_path.name, chosen)
+
+        details = _clean_stderr(result.stderr) or f"No subtitles for '{chosen}'"
+        if _is_rate_limited(result.stderr):
+            details = f"YouTube rate limit (HTTP 429) while downloading '{chosen}'. {details}"
+        raise fail(details)
 
 
 def _format_upload_date(raw_date: str) -> str:

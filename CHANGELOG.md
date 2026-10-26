@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.1] - 2026-10-26
+
+### Fixed
+- `get_transcript` failing with `HTTP Error 429: Too Many Requests` on subtitle downloads: yt-dlp had no
+  browser-impersonation backend installed (`curl-cffi` missing), so YouTube rejected the requests.
+  yt-dlp is now installed with the `pin-curl-cffi` extra (`curl-cffi==0.16.0`, exact pin).
+- Subtitle fetching no longer runs one full yt-dlp extraction per candidate language (up to 7 per call).
+  It lists the available languages once, then downloads only the first available one of the fallback order.
+- HTTP 429 is retried once after a short pause, then reported explicitly as a rate limit.
+- Error `details` now explain what happened (languages offered, rate limit) instead of only showing the
+  last attempted language's stderr; the impersonation warning noise is filtered out.
+
+### Added
+- CI smoke test asserting a Chrome impersonation target is available in the Docker image.
+
 ## [2.0.0] - 2026-09-25
 
 ### Added

@@ -33,7 +33,7 @@ layer anymore.
 ### Transcript pipeline
 
 1. `ytdlp.fetch_subtitles`: extract the video ID from the URL (supports `watch?v=`, `youtu.be/`,
-   `embed/`, `shorts/`, `live/`, and raw 11-char IDs), run `yt-dlp` in a per-call
+   `embed/`, `shorts/`, `live/`, and raw 11-char IDs), run `yt-dlp` (one `--dump-json` extraction to list available languages, then one download of the first available language of the fallback order; one retry on HTTP 429) in a per-call
    `tempfile.TemporaryDirectory()` with `--write-sub --write-auto-sub --skip-download
    --extractor-args youtube:player_client=default`, 30s timeout, off the event loop via
    `anyio.to_thread.run_sync`. Success = a `.vtt` file exists in that tempdir; the returncode is
@@ -95,9 +95,11 @@ docker compose up -d --build  # local container
   without a reason recorded in the commit message.
 - yt-dlp is a pinned Python dependency, invoked as `sys.executable -m yt_dlp` (the interpreter's own
   environment, not PATH) — never a `latest` binary download.
-- yt-dlp is installed with the `default,deno` extras: `default` pulls `yt-dlp-ejs` and `deno` pulls the
-  Deno JS runtime, both required since yt-dlp 2025.11.12 to solve YouTube's player challenge. Dropping
-  the extras silently breaks YouTube extraction in production while unit tests stay green.
+- yt-dlp is installed with the `default,deno,pin-curl-cffi` extras: `default` pulls `yt-dlp-ejs` and `deno` pulls the
+  Deno JS runtime, both required since yt-dlp 2025.11.12 to solve YouTube's player challenge;
+  `pin-curl-cffi` pulls an exactly-pinned `curl-cffi`, which yt-dlp needs to impersonate a browser on
+  subtitle (`timedtext`) downloads. Dropping the extras silently breaks YouTube extraction in production
+  (HTTP 429 on subtitles) while unit tests stay green; CI checks `--list-impersonate-targets`.
 - Docker base image and the `uv` image are pinned to exact tags. `:latest` is never used anywhere — images, GHCR release tags,
   Docker Hub pulls, none of it.
 - Default `pytest` run has no network access; anything hitting real YouTube is marked
