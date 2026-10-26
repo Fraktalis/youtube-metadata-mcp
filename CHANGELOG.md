@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.2] - 2026-10-26
+
+### Fixed
+- `get_transcript` still got `HTTP Error 429` on videos with auto-generated captions: the picker chose the
+  plain `en` track, which YouTube serves as a machine translation and rate-limits, instead of the real
+  `en-orig` track. Real tracks (manual subtitles or `<lang>-orig`) are now preferred across the whole
+  fallback order; machine translations are only a last resort. The returned `language` may therefore be
+  `en-orig`, or another language of the fallback order, rather than the requested one.
+
 ## [2.0.1] - 2026-10-26
 
 ### Fixed

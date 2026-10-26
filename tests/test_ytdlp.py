@@ -49,7 +49,7 @@ def _make_subtitle_run(
     return fake_run
 
 
-ALL_LANGS = {"en", "fr", "fr-orig", "es", "de", "pt", "ja", "ko"}
+ALL_LANGS = {"en", "en-orig", "fr", "fr-orig", "es", "de", "pt", "ja", "ko"}
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +95,52 @@ def test_fetch_subtitles_all_languages_fail_raises_with_attempted_list():
     err = exc_info.value
     assert err.attempted_languages == ["de", "en", "fr", "es"]
     assert err.details is not None
+
+
+def _listing_run(manual: set[str], automatic: set[str]):
+    base = _make_subtitle_run()
+
+    def fake_run(cmd, capture_output, text, timeout):
+        if "--dump-json" in cmd:
+            payload = json.dumps(
+                {
+                    "subtitles": {lang: [] for lang in manual},
+                    "automatic_captions": {lang: [] for lang in automatic},
+                }
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr="")
+        return base(cmd, capture_output, text, timeout)
+
+    return fake_run
+
+
+def test_fetch_subtitles_prefers_orig_track_over_translation():
+    # Real shape of L7bhMKhAClg: `en` is a machine translation (HTTP 429), `en-orig` is not.
+    fake_run = _listing_run(manual=set(), automatic={"en", "fr", "en-orig", "ar-orig"})
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "en-orig"
+
+
+def test_fetch_subtitles_prefers_real_track_of_fallback_language_over_translation():
+    fake_run = _listing_run(manual=set(), automatic={"en", "fr-orig"})
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "fr-orig"
+
+
+def test_fetch_subtitles_manual_track_wins_over_orig():
+    fake_run = _listing_run(manual={"en"}, automatic={"en", "en-orig"})
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "en"
+
+
+def test_fetch_subtitles_falls_back_to_translation_when_no_real_track():
+    fake_run = _listing_run(manual=set(), automatic={"es", "ru-orig"})
+    with patch("subprocess.run", side_effect=fake_run):
+        _, actual_lang = ytdlp.fetch_subtitles("vid00000001", "en")
+    assert actual_lang == "es"
 
 
 def test_fetch_subtitles_error_lists_languages_actually_offered():
@@ -277,10 +323,10 @@ def test_concurrent_fetches_same_video_id_do_not_interfere():
             th.join()
 
     assert not errors
-    assert results["en"][1] == "en"
-    assert "en text" in results["en"][0]
-    assert results["fr"][1] == "fr"
-    assert "fr text" in results["fr"][0]
+    assert results["en"][1] == "en-orig"
+    assert "en-orig text" in results["en"][0]
+    assert results["fr"][1] == "fr-orig"
+    assert "fr-orig text" in results["fr"][0]
 
 
 # ---------------------------------------------------------------------------

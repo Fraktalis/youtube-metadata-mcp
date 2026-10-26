@@ -33,7 +33,7 @@ layer anymore.
 ### Transcript pipeline
 
 1. `ytdlp.fetch_subtitles`: extract the video ID from the URL (supports `watch?v=`, `youtu.be/`,
-   `embed/`, `shorts/`, `live/`, and raw 11-char IDs), run `yt-dlp` (one `--dump-json` extraction to list available languages, then one download of the first available language of the fallback order; one retry on HTTP 429) in a per-call
+   `embed/`, `shorts/`, `live/`, and raw 11-char IDs), run `yt-dlp` (one `--dump-json` extraction to list available languages, then one download of the best available language of the fallback order: real tracks, i.e. manual subs or `<lang>-orig`, before machine translations, which YouTube rate-limits; one retry on HTTP 429) in a per-call
    `tempfile.TemporaryDirectory()` with `--write-sub --write-auto-sub --skip-download
    --extractor-args youtube:player_client=default`, 30s timeout, off the event loop via
    `anyio.to_thread.run_sync`. Success = a `.vtt` file exists in that tempdir; the returncode is

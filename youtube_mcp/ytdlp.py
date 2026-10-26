@@ -78,10 +78,10 @@ def _run_ytdlp(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def _list_subtitle_languages(video_id: str) -> tuple[set[str], str | None]:
+def _list_subtitle_languages(video_id: str) -> tuple[set[str], set[str], str | None]:
     """One yt-dlp extraction listing the subtitle languages YouTube offers for the video.
 
-    Returns (languages, error_details). `languages` merges manual and automatic tracks.
+    Returns (manual, automatic, error_details).
     """
     cmd = [
         *YTDLP_CMD,
@@ -94,23 +94,44 @@ def _list_subtitle_languages(video_id: str) -> tuple[set[str], str | None]:
     try:
         result = _run_ytdlp(cmd)
     except subprocess.TimeoutExpired:
-        return set(), "Timeout listing available subtitles"
+        return set(), set(), "Timeout listing available subtitles"
 
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return set(), _clean_stderr(result.stderr) or "Could not list available subtitles"
+        details = _clean_stderr(result.stderr) or "Could not list available subtitles"
+        return set(), set(), details
 
-    languages = set(data.get("subtitles") or {}) | set(data.get("automatic_captions") or {})
-    return languages, None
+    return set(data.get("subtitles") or {}), set(data.get("automatic_captions") or {}), None
+
+
+def pick_subtitle_language(
+    attempts: list[str], manual: set[str], automatic: set[str]
+) -> str | None:
+    """Pick the track to download, preferring real tracks over machine translations.
+
+    YouTube lists every auto-caption language as a machine translation of the original
+    track (plain `en`, `fr`...), next to the untranslated original (`en-orig`). Translated
+    tracks are the ones YouTube answers HTTP 429 to, so real tracks (manual subtitles or
+    `<lang>-orig`) win across the whole fallback order, and translations come last.
+    """
+    for candidate in attempts:
+        if candidate in manual:
+            return candidate
+        if f"{candidate}-orig" in automatic:
+            return f"{candidate}-orig"
+        if candidate.endswith("-orig") and candidate in automatic:
+            return candidate
+    return next((candidate for candidate in attempts if candidate in automatic), None)
 
 
 def fetch_subtitles(video_id: str, lang: str) -> tuple[str, str]:
     """Fetch a transcript's raw VTT text for video_id, with language fallback.
 
-    Does one extraction to learn which languages exist, picks the first language of the
-    fallback order that is available, then downloads that single track (instead of one
-    full extraction per candidate language, which got the server rate-limited by YouTube).
+    Does one extraction to learn which languages exist, picks the best available language of
+    the fallback order (real tracks before machine translations), then downloads that single
+    track (instead of one full extraction per candidate language, which got the server
+    rate-limited by YouTube).
 
     Returns (vtt_text, actual_language). Raises SubtitleFetchError if no
     subtitle could be fetched in any attempted language.
@@ -124,13 +145,13 @@ def fetch_subtitles(video_id: str, lang: str) -> tuple[str, str]:
             attempted_languages=attempts,
         )
 
-    available, error = _list_subtitle_languages(video_id)
+    manual, automatic, error = _list_subtitle_languages(video_id)
     if error:
         raise fail(error)
 
-    chosen = next((candidate for candidate in attempts if candidate in available), None)
+    chosen = pick_subtitle_language(attempts, manual, automatic)
     if chosen is None:
-        offered = ", ".join(sorted(available)) or "none"
+        offered = ", ".join(sorted(manual | automatic)) or "none"
         raise fail(f"No subtitles in the attempted languages. Languages offered: {offered}")
 
     with tempfile.TemporaryDirectory(prefix=f"ytdlp-{video_id}-") as tmpdir:
